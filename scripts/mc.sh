@@ -4,6 +4,10 @@
 #   mc.sh ship <file>       upload the build, compare hashes, publish
 #   mc.sh discard           delete the draft (a failed build leaves nothing behind)
 set -euo pipefail
+if [ -z "${MANAGE_CONTROL_API_KEY:-}" ]; then
+  echo "::error::secret MANAGE_CONTROL_API_KEY is empty: set it with 'gh secret set MANAGE_CONTROL_API_KEY'" >&2
+  exit 1
+fi
 api=https://api.weisscivitech.com/api/v1/service
 key=(-H "X-API-Key: $MANAGE_CONTROL_API_KEY")
 
