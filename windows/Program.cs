@@ -26,6 +26,9 @@ sealed class MainForm : Form
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     bool errorShown;
     int retries;
+    CoreWebView2Environment? env;
+    ClaudeWindow? claude;
+    string lastCopied = "";  // what "שאל את Claude" copied: the Claude window pastes it
 
     public MainForm()
     {
@@ -43,7 +46,6 @@ sealed class MainForm : Form
 
     async Task Start()
     {
-        CoreWebView2Environment env;
         try
         {
             env = await CoreWebView2Environment.CreateAsync(null, Path.Combine(Dir, "WebView2"));
@@ -64,6 +66,7 @@ sealed class MainForm : Form
             " openExternal: (u) => chrome.webview.postMessage({ op: 'open', url: String(u) })," +
             " checkUpdate: () => chrome.webview.postMessage({ op: 'update' })," +
             " settings: () => chrome.webview.postMessage({ op: 'settings' })," +
+            " pastesIntoClaude: true," +
             $" version: () => {JsonSerializer.Serialize(Updater.Current)} }};");
         core.WebMessageReceived += (_, e) => OnMessage(e.WebMessageAsJson);
         core.NewWindowRequested += (_, e) => { e.Handled = true; OpenExternal(e.Uri); };  // claude.ai and links: the browser
@@ -95,8 +98,19 @@ sealed class MainForm : Form
         var m = doc.RootElement;
         switch (m.GetProperty("op").GetString())
         {
-            case "copy": Clipboard.SetText(m.GetProperty("text").GetString() ?? ""); break;
-            case "open": OpenExternal(m.GetProperty("url").GetString() ?? ""); break;
+            case "copy":
+                lastCopied = m.GetProperty("text").GetString() ?? "";
+                Clipboard.SetText(lastCopied);
+                break;
+            case "open":
+                var url = m.GetProperty("url").GetString() ?? "";
+                if (url.StartsWith("https://claude.ai/") && env != null && lastCopied.Length > 0)
+                {
+                    claude ??= new ClaudeWindow(env);
+                    claude.Ask(lastCopied);
+                }
+                else OpenExternal(url);
+                break;
             case "update": _ = Updater.Check(this, quiet: false); break;
             case "settings": AskServerUrl(); break;
         }
