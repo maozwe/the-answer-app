@@ -11,3 +11,5 @@
 נגישה רק למכשירים של בעל החשבון.
 
 Build locally: JDK 17, Android SDK 36, `./gradlew assembleDebug`.
+
+**First install over a test build:** Android rejects an update signed with a different key, so uninstall a test (debug) build once before installing a release.
