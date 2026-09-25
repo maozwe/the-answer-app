@@ -31,8 +31,13 @@ sealed class ClaudeWindow : Form
     {
         await web.EnsureCoreWebView2Async(env);
         var core = web.CoreWebView2;
-        core.NewWindowRequested += (_, e) =>  // links in answers: the browser
+        core.NewWindowRequested += (_, e) =>
         {
+            // sign-in popups (Google, Apple, claude.ai itself) must stay here: they report back to the
+            // window that opened them. Other links (sources in an answer) go to the browser.
+            if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && (u.Host.EndsWith("google.com") || u.Host.EndsWith("apple.com")
+                || u.Host.EndsWith("claude.ai") || u.Host.EndsWith("anthropic.com") || u.Scheme == "about"))
+                return;  // WebView2 opens its own popup window, linked to this page
             e.Handled = true;
             if (e.Uri.StartsWith("https://")) Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true });
         };
