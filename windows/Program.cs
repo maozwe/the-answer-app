@@ -25,6 +25,7 @@ sealed class MainForm : Form
 
     readonly WebView2 web = new() { Dock = DockStyle.Fill };
     bool errorShown;
+    int retries;
 
     public MainForm()
     {
@@ -71,10 +72,18 @@ sealed class MainForm : Form
             if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && u.Scheme.StartsWith("http")
                 && u.Host != new Uri(ServerUrl()).Host) { e.Cancel = true; OpenExternal(e.Uri); }
         };
-        core.NavigationCompleted += (_, e) =>
+        core.NavigationCompleted += async (_, e) =>
         {
-            if (e.IsSuccess) errorShown = false;
-            else if (e.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled) ConnectionError(e.WebErrorStatus.ToString());
+            if (e.IsSuccess) { errorShown = false; retries = 0; return; }
+            if (e.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled) return;
+            if (retries++ < 2)  // the server restarting (an update) drops the connection for a few seconds
+            {
+                await Task.Delay(3000);
+                core.Navigate(ServerUrl());
+                return;
+            }
+            retries = 0;
+            ConnectionError(e.WebErrorStatus.ToString());
         };
         core.Navigate(ServerUrl());
         _ = Updater.Check(this, quiet: true);

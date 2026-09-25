@@ -30,7 +30,8 @@ public class MainActivity extends Activity {
     static final String DEFAULT_URL = "http://100.71.25.67:8765/";
     private WebView web;
     private SharedPreferences prefs;
-    private boolean errorShown;
+    private boolean errorShown, failed;
+    private int retries;
     private ValueCallback<Uri[]> fileCallback;  // the page's <input type=file>, waiting for the picker
     private static final int PICK_FILES = 7;
 
@@ -76,13 +77,26 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                failed = false;
+            }
+
+            @Override
             public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
-                if (req.isForMainFrame()) showConnectionError(String.valueOf(err.getDescription()));
+                if (!req.isForMainFrame()) return;
+                failed = true;
+                if (retries++ < 2) {  // the server restarting (an update) drops the connection for a few seconds
+                    view.postDelayed(() -> view.loadUrl(serverUrl()), 3000);
+                    return;
+                }
+                retries = 0;
+                showConnectionError(String.valueOf(err.getDescription()));
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 errorShown = false;
+                if (!failed) retries = 0;
             }
         });
         if (state != null) web.restoreState(state); else web.loadUrl(serverUrl());
