@@ -2,9 +2,11 @@ plugins {
     id("com.android.application")
 }
 
-// The release workflow sets VERSION_CODE (the run number) and the signing key; the app updates
-// itself only to a higher versionCode signed with the same key.
-val code = (System.getenv("VERSION_CODE") ?: "2").toInt()
+// The release workflow sets VERSION_NAME (the version manage-control assigned, e.g. 1.4.2) and the
+// signing key. versionCode follows it and stays above the 1.1xx builds of the GitHub-release era; the
+// app updates itself only to a higher version signed with the same key.
+val appVersion = System.getenv("VERSION_NAME") ?: "0.0.1"
+val code = appVersion.split(".").map { it.toInt() }.let { (a, b, c) -> 1000 + a * 1_000_000 + b * 1_000 + c }
 val keystore = System.getenv("KEYSTORE_FILE")
 
 android {
@@ -16,7 +18,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = code
-        versionName = "1.$code"
+        versionName = appVersion
     }
 
     signingConfigs {

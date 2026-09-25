@@ -4,14 +4,12 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.PendingIntent;
 import android.content.Intent;
-import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Settings;
 import android.widget.Toast;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -19,26 +17,21 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
 
 /**
- * Updates from the public GitHub releases of maozwe/the-answer-app: tag "v<versionCode>" with an
- * .apk asset, built and signed by the repo's workflow on every merge to main. The new APK is
- * streamed into a PackageInstaller session; Android shows its own install confirmation.
+ * Updates from manage-control: the newest published version on the app's android line, built and
+ * signed by the repo's workflow on every merge to main. The APK is streamed into a PackageInstaller
+ * session and committed only when it hashes to the sha256 the backend stored; Android shows its own
+ * install confirmation.
  */
 final class Updater {
-    static final String LATEST = "https://api.github.com/repos/maozwe/the-answer-app/releases/latest";
+    static final String SLUG = "the-answer";  // the app's slug in manage-control
+    static final String LATEST = "https://api.weisscivitech.com/api/v1/storefront/apps/" + SLUG + "/latest?platform=android";
     static final String ACTION_STATUS = "com.maoz.theanswer.INSTALL_STATUS";
 
     private Updater() {}
-
-    static long versionCode(Activity a) {
-        try {
-            PackageInfo p = a.getPackageManager().getPackageInfo(a.getPackageName(), 0);
-            return Build.VERSION.SDK_INT >= 28 ? p.getLongVersionCode() : p.versionCode;
-        } catch (Exception e) {
-            return 0;
-        }
-    }
 
     static String versionName(Activity a) {
         try {
@@ -53,24 +46,17 @@ final class Updater {
         new Thread(() -> {
             try {
                 JSONObject rel = new JSONObject(get(LATEST));
-                long latest = Long.parseLong(rel.getString("tag_name").replaceAll("\\D", ""));
-                if (latest <= versionCode(a)) {
+                JSONObject file = rel.optJSONObject("download");
+                String version = rel.optString("version", "");
+                if (file == null || compare(version, versionName(a)) <= 0) {
                     if (verbose) toast(a, "האפליקציה מעודכנת (גרסה " + versionName(a) + ")");
                     return;
                 }
-                String apk = null;
-                JSONArray assets = rel.getJSONArray("assets");
-                for (int i = 0; i < assets.length(); i++) {
-                    JSONObject asset = assets.getJSONObject(i);
-                    if (asset.getString("name").endsWith(".apk")) apk = asset.getString("browser_download_url");
-                }
-                if (apk == null) throw new IllegalStateException("אין קובץ APK בגרסה " + rel.getString("tag_name"));
-                String url = apk;
-                String notes = rel.optString("body", "").trim();
+                String url = file.getString("url"), sha256 = file.getString("sha256");
                 a.runOnUiThread(() -> new AlertDialog.Builder(a)
-                        .setTitle("יש גרסה חדשה: " + rel.optString("name", rel.optString("tag_name")))
-                        .setMessage(notes.isEmpty() ? "להתקין עכשיו?" : notes)
-                        .setPositiveButton("עדכן", (d, w) -> download(a, url))
+                        .setTitle("יש גרסה חדשה: " + version)
+                        .setMessage("מותקנת " + versionName(a) + ". להתקין עכשיו?")
+                        .setPositiveButton("עדכן", (d, w) -> download(a, url, sha256))
                         .setNegativeButton("לא עכשיו", null)
                         .show());
             } catch (Exception e) {
@@ -79,7 +65,25 @@ final class Updater {
         }).start();
     }
 
-    static void download(Activity a, String url) {
+    /** Dotted versions compared number by number (1.10.0 > 1.9.3); an unreadable part counts as 0. */
+    static int compare(String x, String y) {
+        String[] p = x.split("\\."), q = y.split("\\.");
+        for (int i = 0; i < Math.max(p.length, q.length); i++) {
+            int d = Long.compare(num(p, i), num(q, i));
+            if (d != 0) return d;
+        }
+        return 0;
+    }
+
+    private static long num(String[] parts, int i) {
+        try {
+            return i < parts.length ? Long.parseLong(parts[i].replaceAll("\\D.*", "")) : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    static void download(Activity a, String url, String sha256) {
         if (Build.VERSION.SDK_INT >= 26 && !a.getPackageManager().canRequestPackageInstalls()) {
             toast(a, "אשר להתקין עדכונים מהאפליקציה הזו, חזור ולחץ שוב \"עדכן\"");
             a.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -94,11 +98,19 @@ final class Updater {
                         PackageInstaller.SessionParams.MODE_FULL_INSTALL));
                 try (PackageInstaller.Session session = installer.openSession(id)) {
                     HttpURLConnection c = open(url);
-                    try (InputStream in = c.getInputStream();
+                    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                    try (InputStream in = new DigestInputStream(c.getInputStream(), digest);
                          OutputStream out = session.openWrite("update.apk", 0, c.getContentLengthLong())) {
                         byte[] buf = new byte[65536];
                         for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
                         session.fsync(out);
+                    }
+                    StringBuilder hex = new StringBuilder();
+                    for (byte b : digest.digest()) hex.append(String.format("%02x", b));
+                    if (!hex.toString().equalsIgnoreCase(sha256)) {
+                        session.abandon();
+                        toast(a, "הקובץ שהורד לא תואם לחתימה שבשרת. העדכון בוטל.");
+                        return;
                     }
                     Intent status = new Intent(a, MainActivity.class).setAction(ACTION_STATUS)
                             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -125,10 +137,9 @@ final class Updater {
     private static HttpURLConnection open(String url) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestProperty("User-Agent", "TheAnswerApp");
-        c.setRequestProperty("Accept", "application/vnd.github+json");
         c.setConnectTimeout(15000);
         c.setReadTimeout(60000);
-        c.setInstanceFollowRedirects(true);  // release assets redirect to GitHub's download host (https)
+        c.setInstanceFollowRedirects(true);
         if (c.getResponseCode() >= 400) throw new IllegalStateException("HTTP " + c.getResponseCode());
         return c;
     }

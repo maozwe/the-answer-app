@@ -1,20 +1,22 @@
-# Every merge (push) to main builds a signed APK and publishes it as a GitHub release.
-# The app (Updater.java) checks the latest release, and installs a higher versionCode.
+# Every merge (push) to main builds the Android app and the Windows app and publishes each on its
+# own release line in manage-control (platform android / windows). The apps update themselves from
+# https://api.weisscivitech.com/api/v1/storefront/apps/<slug>/latest?platform=..., checking sha256.
 name: release
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency: release
 
 jobs:
-  apk:
+  android:
     runs-on: ubuntu-latest
+    env:
+      MANAGE_CONTROL_API_KEY: ${{ secrets.MANAGE_CONTROL_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,11 +28,13 @@ jobs:
       - name: Android platform and build tools
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
-      - name: Version and signing key
+      - name: Draft a version
+        run: scripts/mc.sh draft android
+
+      - name: Signing key
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
-          echo "VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
           printf '%s' "$KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
@@ -41,13 +45,41 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --console=plain
-          cp app/build/outputs/apk/release/app-release.apk "TheAnswer-1.$VERSION_CODE.apk"
+          VERSION_NAME="$MC_VERSION" ./gradlew assembleRelease --no-daemon --console=plain
+          cp app/build/outputs/apk/release/app-release.apk "TheAnswer-$MC_VERSION.apk"
 
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish
+        run: scripts/mc.sh ship "TheAnswer-$MC_VERSION.apk"
+
+      - name: Discard the draft
+        if: failure()
+        run: scripts/mc.sh discard
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      MANAGE_CONTROL_API_KEY: ${{ secrets.MANAGE_CONTROL_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Draft a version
+        run: scripts/mc.sh draft windows
+
+      - name: Build TheAnswer.exe
         run: |
-          git log -1 --pretty=%B | grep -v '^Co-Authored-By:' > notes.txt  # the commit message, no trailer
-          gh release create "v$VERSION_CODE" "TheAnswer-1.$VERSION_CODE.apk" \
-            --title "גרסה 1.$VERSION_CODE" --notes-file notes.txt --latest
+          dotnet publish windows/TheAnswer.csproj -c Release -p:Version="$MC_VERSION" -o out
+          cp out/TheAnswer.exe "TheAnswer-$MC_VERSION.exe"
+
+      - name: Publish
+        run: scripts/mc.sh ship "TheAnswer-$MC_VERSION.exe"
+
+      - name: Discard the draft
+        if: failure()
+        run: scripts/mc.sh discard
