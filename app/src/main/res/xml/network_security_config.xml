@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The search page is served over plain http inside the Tailscale network (encrypted by the
+     tunnel itself). Cleartext is allowed only for Tailscale addresses and the emulator's host. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">100.71.25.67</domain>
+        <domain includeSubdomains="false">maoz-server</domain>
+        <domain includeSubdomains="true">ts.net</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
