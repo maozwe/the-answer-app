@@ -48,6 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git log -1 --pretty=%B > notes.txt
+          git log -1 --pretty=%B | grep -v '^Co-Authored-By:' | sed -e :a -e '/^
+*$/{$d;N;ba' -e '}' > notes.txt  # the commit message, no trailers
           gh release create "v$VERSION_CODE" "TheAnswer-1.$VERSION_CODE.apk" \
             --title "גרסה 1.$VERSION_CODE" --notes-file notes.txt --latest
