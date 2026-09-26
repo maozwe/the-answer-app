@@ -42,6 +42,9 @@ sealed class MainForm : Form
         Load += async (_, _) => await Start();
     }
 
+    public static bool IsServer(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && u.Host == new Uri(ServerUrl()).Host;
+
     static string ServerUrl() => File.Exists(SettingsFile) ? File.ReadAllText(SettingsFile).Trim() : DefaultUrl;
 
     async Task Start()
@@ -69,7 +72,12 @@ sealed class MainForm : Form
             " pastesIntoClaude: true," +
             $" version: () => {JsonSerializer.Serialize(Updater.Current)} }};");
         core.WebMessageReceived += (_, e) => OnMessage(e.WebMessageAsJson);
-        core.NewWindowRequested += (_, e) => { e.Handled = true; OpenExternal(e.Uri); };  // claude.ai and links: the browser
+        core.NewWindowRequested += (_, e) =>
+        {
+            if (IsServer(e.Uri)) return;  // a document of the search server: an app window, signed in
+            e.Handled = true;
+            OpenExternal(e.Uri);  // other links: the browser
+        };
         core.NavigationStarting += (_, e) =>
         {
             if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && u.Scheme.StartsWith("http")

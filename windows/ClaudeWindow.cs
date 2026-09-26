@@ -35,8 +35,9 @@ sealed class ClaudeWindow : Form
         {
             // sign-in popups (Google, Apple, claude.ai itself) must stay here: they report back to the
             // window that opened them. Other links (sources in an answer) go to the browser.
+            // and a cited document of the search server opens in an app window too, signed in
             if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var u) && (u.Host.EndsWith("google.com") || u.Host.EndsWith("apple.com")
-                || u.Host.EndsWith("claude.ai") || u.Host.EndsWith("anthropic.com") || u.Scheme == "about"))
+                || u.Host.EndsWith("claude.ai") || u.Host.EndsWith("anthropic.com") || u.Scheme == "about" || MainForm.IsServer(e.Uri)))
                 return;  // WebView2 opens its own popup window, linked to this page
             e.Handled = true;
             if (e.Uri.StartsWith("https://")) Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true });
