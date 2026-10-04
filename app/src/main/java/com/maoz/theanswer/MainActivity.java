@@ -12,6 +12,8 @@ import android.net.Uri;
 import android.graphics.Insets;
 import android.os.Build;
 import android.os.Bundle;
+import android.print.PrintAttributes;
+import android.print.PrintManager;
 import android.text.InputType;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -208,6 +210,14 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void openExternal(String url) {
             runOnUiThread(() -> MainActivity.this.openExternal(url));
+        }
+
+        @JavascriptInterface
+        public void print() {
+            runOnUiThread(() -> {
+                PrintManager pm = (PrintManager) getSystemService(Context.PRINT_SERVICE);
+                pm.print("השיחה", web.createPrintDocumentAdapter("השיחה"), new PrintAttributes.Builder().build());
+            });
         }
 
         @JavascriptInterface
