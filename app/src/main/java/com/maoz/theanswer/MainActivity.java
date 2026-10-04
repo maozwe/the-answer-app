@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.graphics.Insets;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
 import android.webkit.JavascriptInterface;
@@ -18,7 +20,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.WindowInsets;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 /**
@@ -40,7 +44,16 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         prefs = getSharedPreferences("settings", MODE_PRIVATE);
         web = new WebView(this);
-        setContentView(web);
+        FrameLayout root = new FrameLayout(this);  // padded, not the WebView: WebView content ignores its own padding
+        root.addView(web);
+        setContentView(root);
+        if (Build.VERSION.SDK_INT >= 35) {  // Android 15+ (targetSdk 35+) draws edge to edge: keep the page clear of the status bar, nav bar and keyboard
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                Insets b = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                v.setPadding(b.left, b.top, b.right, b.bottom);
+                return WindowInsets.CONSUMED;
+            });
+        }
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
