@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TheAnswer</AssemblyName>
     <Product>The Answer</Product>
+    <ApplicationIcon>TheAnswer.ico</ApplicationIcon>
     <!-- CI passes -p:Version=<the version manage-control assigned> -->
     <Version>0.0.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
