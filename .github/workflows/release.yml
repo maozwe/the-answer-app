@@ -14,7 +14,8 @@ concurrency: release
 
 jobs:
   android:
-    runs-on: ubuntu-latest
+    # The owner's WSL2 machine (ephemeral JIT runners); GitHub-hosted runners are not used (owner decision 2026-11-02).
+    runs-on: [self-hosted, maoz-main00-linux]
     env:
       MANAGE_CONTROL_API_KEY: ${{ secrets.MANAGE_CONTROL_API_KEY }}
     steps:
@@ -56,7 +57,8 @@ jobs:
         run: scripts/mc.sh discard
 
   windows:
-    runs-on: windows-latest
+    # The owner's Windows machine (ephemeral JIT runners); GitHub-hosted runners are not used (owner decision 2026-11-02).
+    runs-on: [self-hosted, maoz-main00]
     defaults:
       run:
         shell: bash
