@@ -3,12 +3,24 @@
 # and creates a release when the project version changes or a v* tag is pushed.
 # Security: no pull_request / pull_request_target triggers (safe for public repos); least-privilege
 # GITHUB_TOKEN per job; only actions/checkout is used, pinned to a full commit SHA.
+# Speed-ups (2026-11-13, staged): docs-only pushes skip CI; a newer push to the same development
+# branch cancels the older CI run; the release job only starts when there is a new version.
 name: maoz-main00 CI
 
 on:
   push:
     branches: ['**']
     tags: ['v*']
+    # Docs-only pushes do not start CI. Later patterns win, so CHANGELOG.md (a version source for
+    # the release job) still triggers. Path filters are not applied to v* tag pushes.
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!docs/**'
+      - '!LICENSE'
+      - '!LICENSE.*'
+      - '!.github/ISSUE_TEMPLATE/**'
+      - 'CHANGELOG.md'
   workflow_dispatch:
 
 permissions:
@@ -22,6 +34,14 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    # One CI run per development branch: a newer push cancels the older run.
+    # The default branch and v* tags get a unique group (run_id), so they are never cancelled or
+    # replaced while waiting, and every release-worthy commit still reaches the release job.
+    concurrency:
+      group: maoz-main00-ci-${{ github.workflow }}-${{ github.ref }}-${{ (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch) && github.run_id || 'dev' }}
+      cancel-in-progress: true
+    outputs:
+      release: ${{ steps.relcheck.outputs.release }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,14 +97,71 @@ jobs:
           if (Test-Path 'Cargo.toml') { Invoke-Step cargo @('build','--locked'); Invoke-Step cargo @('test','--locked'); $did = $true }
           # Flutter
           if (Test-Path 'pubspec.yaml') { Invoke-Step flutter.bat @('pub','get'); if (Test-Path 'test') { Invoke-Step flutter.bat @('test') }; $did = $true }
-          # Android / Gradle (Kotlin, Java)
-          if (Test-Path 'gradlew.bat') { Invoke-Step .\gradlew.bat @('--no-daemon','assembleDebug','testDebugUnitTest'); $did = $true }
+          # Android / Gradle (Kotlin, Java): daemon allowed (short idle timeout), local build cache in
+          # GRADLE_USER_HOME (shared toolcache\gradle-home), configuration cache with problems as warnings.
+          # Caches are skipped for non-ASCII checkout paths (AGP + build cache break on them).
+          if (Test-Path 'gradlew.bat') {
+            $gArgs = @('-Dorg.gradle.daemon.idletimeout=600000')
+            if ((Get-Location).Path -notmatch '[^\x00-\x7F]') { $gArgs += @('--build-cache','--configuration-cache','-Dorg.gradle.configuration-cache.problems=warn') }
+            Invoke-Step .\gradlew.bat ($gArgs + @('assembleDebug','testDebugUnitTest')); $did = $true
+          }
           if (-not $did) { Write-Host "::notice::No recognised build system (package.json, pyproject/requirements, sln/csproj, Cargo.toml, pubspec.yaml, gradlew). Add ci/local-ci.ps1 to define CI for this repo." }
+
+      - name: Check whether a release is needed
+        id: relcheck
+        # Cheap check inside the CI job, so the separate release job (a fresh runner) only starts
+        # when there is something to release. The release job re-checks before releasing.
+        if: github.event_name != 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch)
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_MODE: off
+          PUBLIC_RELEASES_REPO: ${{ vars.PUBLIC_RELEASES_REPO }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Set-Out([string]$v) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "release=$v`n"); Write-Host "release=$v" }
+          function Get-ProjectVersion {
+            if (Test-Path 'VERSION') { return (Get-Content VERSION -TotalCount 1).Trim() }
+            if (Test-Path 'package.json') { $v = (Get-Content package.json -Raw | ConvertFrom-Json).version; if ($v) { return $v } }
+            foreach ($f in 'pyproject.toml','Cargo.toml') {
+              if (Test-Path $f) {
+                $t = Get-Content $f -Raw
+                $m = [regex]::Match($t, '(?ms)^\[(project|package|tool\.poetry)\][^\[]*?^version\s*=\s*"([^"]+)"')
+                if ($m.Success) { return $m.Groups[2].Value }
+              }
+            }
+            if (Test-Path 'pubspec.yaml') { $m = Select-String -Path pubspec.yaml -Pattern '^version:\s*([0-9][^\s+]*)' | Select-Object -First 1; if ($m) { return $m.Matches[0].Groups[1].Value } }
+            $props = @(Get-ChildItem -Recurse -Depth 3 -Include Directory.Build.props,*.csproj -ErrorAction SilentlyContinue)
+            foreach ($p in $props) { $m = Select-String -Path $p.FullName -Pattern '<(Version|VersionPrefix)>([^<]+)<' | Select-Object -First 1; if ($m) { return $m.Matches[0].Groups[2].Value } }
+            foreach ($g in 'app/build.gradle.kts','app/build.gradle') { if (Test-Path $g) { $m = Select-String -Path $g -Pattern 'versionName\s*=?\s*"([^"]+)"' | Select-Object -First 1; if ($m) { return $m.Matches[0].Groups[1].Value } } }
+            if (Test-Path 'CHANGELOG.md') { $m = Select-String -Path CHANGELOG.md -Pattern '^##\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)' | Select-Object -First 1; if ($m) { return $m.Matches[0].Groups[1].Value } }
+            return $null
+          }
+          if ($env:RELEASE_MODE -eq 'off') { Write-Host 'Release mode is off for this repo.'; Set-Out 'false'; exit 0 }
+          if ($env:REF_TYPE -eq 'tag') { Set-Out 'true'; exit 0 }
+          $ver = Get-ProjectVersion
+          if (-not $ver) { Write-Host 'No version found; no release.'; Set-Out 'false'; exit 0 }
+          $tag = "v$ver"
+          $ErrorActionPreference = 'Continue'
+          gh api "repos/$($env:REPO)/git/ref/tags/$tag" --silent 2>$null
+          $exists = ($LASTEXITCODE -eq 0)
+          if (-not $exists -and $env:PUBLIC_RELEASES_REPO) {
+            gh release view $tag --repo $env:PUBLIC_RELEASES_REPO --json tagName 2>$null | Out-Null
+            $exists = ($LASTEXITCODE -eq 0)
+          }
+          $ErrorActionPreference = 'Stop'
+          if ($exists) { Write-Host "$tag already exists; no release job."; Set-Out 'false' } else { Write-Host "$tag is new; the release job will run."; Set-Out 'true' }
+          exit 0
 
   release:
     needs: ci
-    # releases only from the default branch or a v* tag, never from a development branch
-    if: github.repository_owner == 'maozwe' && github.event_name != 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch)
+    # releases only from the default branch or a v* tag, never from a development branch,
+    # and only when the CI job found a new version (or a v* tag was pushed).
+    # No concurrency group here on purpose: a release must never be cancelled or replaced mid-flight.
+    if: github.repository_owner == 'maozwe' && github.event_name != 'workflow_dispatch' && (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch) && needs.ci.outputs.release == 'true'
     runs-on: [self-hosted, maoz-main00]
     timeout-minutes: 30
     permissions:
